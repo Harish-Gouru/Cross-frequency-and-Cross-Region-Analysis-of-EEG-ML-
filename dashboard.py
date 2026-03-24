@@ -147,4 +147,4 @@ elif nav == "🌀 PAC Coupling":
         plt.close()
 
 st.divider()
-st.markdown("<p style='text-align: center; color: #6c757d;'>Final Production Build | Professional Light Edition</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #6c757d;'> Project | Harish.G </p>", unsafe_allow_html=True)
