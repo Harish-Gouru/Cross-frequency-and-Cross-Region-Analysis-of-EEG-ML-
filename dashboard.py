@@ -9,45 +9,35 @@ import io
 import tempfile
 import os
 
-# --- 1. PAGE CONFIG & CLEAN LIGHT THEME ---
+# --- 1. PAGE CONFIG & SIMPLE UI ---
 st.set_page_config(page_title="NeuroPulse Analytics", layout="wide", page_icon="🧠")
 
-# Professional Light Theme CSS
 st.markdown("""
     <style>
-    /* Main background */
     .main { background-color: #f8f9fa; color: #212529; }
     
-    /* Clean Metric Cards */
+    /* Small, Simple Download Buttons */
+    .stDownloadButton > button {
+        font-size: 11px !important;
+        padding: 2px 10px !important;
+        background-color: transparent !important;
+        color: #007bff !important;
+        border: 1px solid #007bff !important;
+        border-radius: 4px !important;
+    }
+
     [data-testid="stMetric"] {
         background-color: #ffffff;
         border: 1px solid #dee2e6;
-        border-radius: 8px;
-        padding: 15px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    
-    /* Sidebar styling - Soft Blue */
-    [data-testid="stSidebar"] {
-        background-color: #e9ecef;
-        border-right: 1px solid #dee2e6;
-    }
-    
-    /* Professional Titles */
-    h1 { color: #0056b3; font-weight: 700; border-bottom: 2px solid #0056b3; padding-bottom: 10px; }
-    h2, h3 { color: #343a40; }
-    
-    /* Buttons */
-    .stButton>button {
-        background-color: #007bff;
-        color: white;
         border-radius: 5px;
-        border: none;
     }
+    
+    /* Clean Headings without underlines */
+    h1 { color: #0056b3; font-weight: 700; border: none; padding-bottom: 0px; font-size: 22px; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. DATA LOADING ENGINE ---
+# --- 2. DATA ENGINE ---
 @st.cache_resource
 def load_data(uploaded_file):
     if uploaded_file is None:
@@ -70,81 +60,96 @@ def load_data(uploaded_file):
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# --- 3. SIDEBAR NAVIGATION ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("🧠 NeuroPulse")
-    st.subheader("Data Management")
     uploaded_file = st.file_uploader("Upload EEG (.edf)", type=["edf"])
     raw_data = load_data(uploaded_file)
-    
     st.divider()
     nav = st.radio("Analysis Suite", ["📊 Power Spectrum", "🔗 Connectivity Map", "🌀 PAC Coupling"])
-    
-    st.divider()
-    st.info("Status: System Ready")
-    st.caption("Institutional Release v6.5")
 
 # --- 4. TOP METRICS ---
 c1, c2, c3 = st.columns(3)
-with c1: st.metric("Channels", len(raw_data.ch_names))
-with c2: st.metric("Sampling Rate", f"{int(raw_data.info['sfreq'])} Hz")
-with c3: st.metric("Recording Time", f"{round(raw_data.times[-1], 2)}s")
+c1.metric("Channels", len(raw_data.ch_names))
+c2.metric("Sampling Rate", f"{int(raw_data.info['sfreq'])} Hz")
+c3.metric("Recording Time", f"{round(raw_data.times[-1], 2)}s")
 
-# --- MODULE 1: PSD (RECTIFIED) ---
+# --- MODULES ---
+
 if nav == "📊 Power Spectrum":
-    st.header("Power Spectral Density")
-    with st.spinner("Analyzing frequencies..."):
-        # RECTIFIED: 2-step process to avoid AttributeError
-        psd_obj = raw_data.compute_psd(fmax=50)
-        # We use a white background for the plot to match the UI
+    col_t, col_btn = st.columns([0.88, 0.12])
+    
+    # RANGES ADDED BACK TO SIDEBAR AND CALCULATION
+    with st.sidebar:
+        st.subheader("Filter Range Settings")
+        f_low = st.slider("Low Range (Hz)", 0.1, 20.0, 1.0)
+        f_high = st.slider("High Range (Hz)", 20.0, 100.0, 50.0)
+
+    col_t.title(f"Power Spectral Density ({f_low}Hz - {f_high}Hz)")
+    
+    with st.spinner("Calculating..."):
+        psd_raw = raw_data.copy().filter(f_low, f_high, verbose=False)
+        psd_obj = psd_raw.compute_psd(fmin=f_low, fmax=f_high)
         fig = psd_obj.plot(average=True, spatial_colors=True, show=False)
         fig.patch.set_facecolor('white')
-        st.pyplot(fig)
+    
+    with col_btn:
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        st.download_button("📥", data=buf.getvalue(), file_name="psd_filtered.png")
+    
+    st.pyplot(fig)
 
-# --- MODULE 2: CONNECTIVITY ---
 elif nav == "🔗 Connectivity Map":
-    st.header("Functional Connectivity")
+    col_t, col_btn = st.columns([0.88, 0.12])
     
     with st.sidebar:
-        bands = {"Delta": (0.5, 4), "Theta": (4, 8), "Alpha": (8, 12), "Beta": (13, 30)}
-        sel_band = st.selectbox("Frequency Band", list(bands.keys()), index=2)
-        l_f, h_f = bands[sel_band]
-        num_ch = st.slider("Electrodes", 2, len(raw_data.ch_names), 16)
+        # RANGES ADDED TO WAVE SELECTION
+        bands = {
+            "Delta (0.5–4Hz)": (0.5, 4), 
+            "Theta (4–8Hz)": (4, 8), 
+            "Alpha (8–12Hz)": (8, 12), 
+            "Beta (13–30Hz)": (13, 30)
+        }
+        sel_name = st.selectbox("Wave Selection", list(bands.keys()), index=2)
+        l_f, h_f = bands[sel_name]
+        num_ch = st.slider("Nodes", 2, len(raw_data.ch_names), len(raw_data.ch_names))
 
-    # Process
+    col_t.title(f"Functional Connectivity: {sel_name}")
+    
     ch_list = raw_data.ch_names[:num_ch]
     filt = raw_data.copy().filter(l_f, h_f, verbose=False).pick_channels(ch_list)
     corr = filt.to_data_frame().drop(columns=['time']).corr()
-
-    # Colorful but professional 'RdBu_r' (Standard for research)
-    fig = px.imshow(corr, color_continuous_scale='RdBu_r', 
-                    title=f"Correlation Matrix ({sel_band})",
-                    template="plotly_white")
     
-    # Export button in a clean spot
-    buf = io.StringIO()
-    fig.write_html(buf)
-    st.download_button("📥 Export Map as HTML", data=buf.getvalue(), file_name="connectivity.html")
+    # INCREASED HEIGHT FOR CLARITY (800px instead of default)
+    fig = px.imshow(corr, color_continuous_scale='RdBu_r', template="plotly_white", height=800)
+    
+    with col_btn:
+        buf = io.StringIO()
+        fig.write_html(buf)
+        st.download_button("📥", data=buf.getvalue(), file_name="connectivity.html")
     
     st.plotly_chart(fig, use_container_width=True)
 
-# --- MODULE 3: PAC (RECTIFIED) ---
 elif nav == "🌀 PAC Coupling":
-    st.header("Phase-Amplitude Coupling")
-    target = st.sidebar.selectbox("Analysis Electrode", raw_data.ch_names)
+    col_t, col_btn = st.columns([0.88, 0.12])
+    col_t.title("Phase-Amplitude Coupling")
     
-    with st.spinner("Computing PAC..."):
-        # RECTIFIED: Removed 'show' to fix TypeError
-        p = Pac(idpac=(1, 0, 0), f_pha=[2, 12], f_amp=[30, 80])
-        data = raw_data.get_data(picks=[target])
-        phases = p.filterfit(raw_data.info['sfreq'], data)
-        
-        plt.figure(figsize=(10, 6))
-        plt.gcf().patch.set_facecolor('white')
-        # Professional 'viridis' color map
-        p.comodulogram(phases.mean(0), title=f"Coupling Analysis: {target}", cmap='viridis')
-        st.pyplot(plt.gcf())
-        plt.close()
+    target = st.sidebar.selectbox("Electrode", raw_data.ch_names)
+    p = Pac(idpac=(1, 0, 0), f_pha=[2, 12], f_amp=[30, 80])
+    data = raw_data.get_data(picks=[target])
+    phases = p.filterfit(raw_data.info['sfreq'], data)
+    
+    plt.figure(figsize=(12, 7))
+    p.comodulogram(phases.mean(0), title=f"PAC Analysis: {target} (Alpha Phase mod. Gamma Amp.)", cmap='viridis')
+    
+    with col_btn:
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        st.download_button("📥", data=buf.getvalue(), file_name="pac.png")
+    
+    st.pyplot(plt.gcf())
+    plt.close()
 
 st.divider()
-st.markdown("<p style='text-align: center; color: #6c757d;'> Project | Harish.G </p>", unsafe_allow_html=True)
+st.caption(" NIT ROURKELA | HARISH GOURU ")
