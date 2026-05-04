@@ -5,35 +5,30 @@ import numpy as np
 import plotly.express as px
 from tensorpac import Pac
 import matplotlib.pyplot as plt
-import io
 import tempfile
 import os
 
-# --- 1. PAGE CONFIG & SIMPLE UI ---
-st.set_page_config(page_title="NeuroPulse Analytics", layout="wide", page_icon="🧠")
+# --- 1. PAGE SETUP & STYLING ---
+st.set_page_config(page_title="NeuroPulse Analytics Pro", layout="wide", page_icon="🧠")
 
 st.markdown("""
     <style>
-    .main { background-color: #f8f9fa; color: #212529; }
-    
-    /* Small, Simple Download Buttons */
-    .stDownloadButton > button {
-        font-size: 11px !important;
-        padding: 2px 10px !important;
-        background-color: transparent !important;
-        color: #007bff !important;
-        border: 1px solid #007bff !important;
-        border-radius: 4px !important;
+    .main { background-color: #0b0e14; color: #e0e0e0; }
+    .stMetric { 
+        background-color: #161b22; 
+        padding: 20px; 
+        border-radius: 15px; 
+        border: 2px solid #30363d; 
     }
-
-    [data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #dee2e6;
-        border-radius: 5px;
+    [data-testid="stSidebar"] { 
+        background-image: linear-gradient(#0d1117, #161b22); 
+        border-right: 2px solid #30363d; 
     }
-    
-    /* Clean Headings without underlines */
-    h1 { color: #0056b3; font-weight: 700; border: none; padding-bottom: 0px; font-size: 22px; margin-bottom: 10px; }
+    .block-container {
+        padding-top: 2rem;
+        border-left: 1px solid #30363d;
+    }
+    h1 { background: -webkit-linear-gradient(#79c0ff, #1f6feb); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -41,8 +36,9 @@ st.markdown("""
 @st.cache_resource
 def load_data(uploaded_file):
     if uploaded_file is None:
-        info = mne.create_info(ch_names=[f'EEG {i+1:03}' for i in range(64)], sfreq=256, ch_types='eeg')
-        return mne.io.RawArray(np.random.randn(64, 5000) * 1e-6, info)
+        info = mne.create_info(ch_names=[f'EEG {i+1:03}' for i in range(16)], sfreq=256, ch_types='eeg')
+        data = np.random.randn(16, 5000) * 1e-5
+        return mne.io.RawArray(data, info)
     
     ext = os.path.splitext(uploaded_file.name)[1].lower()
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
@@ -51,105 +47,110 @@ def load_data(uploaded_file):
     
     try:
         raw = mne.io.read_raw_edf(tmp_path, preload=True, verbose=False)
-        raw.pick_types(eeg=True)
+        raw.pick_types(eeg=True) 
         return raw
     except Exception as e:
-        st.error(f"Error: {e}")
-        st.stop()
+        st.error(f"❌ EDF Load Error: {e}")
+        return None
     finally:
-        if os.path.exists(tmp_path):
+        if os.path.exists(tmp_path): 
             os.remove(tmp_path)
 
-# --- 3. SIDEBAR ---
+# --- 3. SIDEBAR NAVIGATION ---
 with st.sidebar:
-    st.title("🧠 NeuroPulse")
-    uploaded_file = st.file_uploader("Upload EEG (.edf)", type=["edf"])
+    st.markdown("<h2 style='text-align: center; color: #58a6ff;'>🧠 NeuroPulse</h2>", unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("Upload Clinical Data (.edf)", type=["edf"])
     raw_data = load_data(uploaded_file)
     st.divider()
-    nav = st.radio("Analysis Suite", ["📊 Power Spectrum", "🔗 Connectivity Map", "🌀 PAC Coupling"])
+    nav = st.radio("Switch Module", ["📊 Power Spectrum", "🔗 Connectivity Map", "🌀 PAC Coupling"])
+    st.divider()
 
-# --- 4. TOP METRICS ---
-c1, c2, c3 = st.columns(3)
-c1.metric("Channels", len(raw_data.ch_names))
-c2.metric("Sampling Rate", f"{int(raw_data.info['sfreq'])} Hz")
-c3.metric("Recording Time", f"{round(raw_data.times[-1], 2)}s")
+if raw_data:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Channels", len(raw_data.ch_names))
+    c2.metric("Sampling Rate", f"{int(raw_data.info['sfreq'])} Hz")
+    c3.metric("Duration", f"{round(raw_data.times[-1], 2)}s")
 
-# --- MODULES ---
+    if nav == "📊 Power Spectrum":
+        st.title("Frequency Power Analysis")
+        with st.sidebar:
+            fmin, fmax = st.slider("Frequency Range (Hz)", 0.5, 100.0, (1.0, 50.0))
+        
+        with st.spinner("Calculating Spectral Density..."):
+            sfreq = raw_data.info['sfreq']
+            n_fft = min(2048, raw_data.n_times)
+            spectrum = raw_data.compute_psd(method='welch', fmin=fmin, fmax=fmax, picks='eeg', n_fft=n_fft)
+            
+            psds, freqs = spectrum.get_data(return_freqs=True)
+            if psds.size == 0:
+                st.warning("⚠️ Could not compute PSD.")
+            else:
+                avg_psd = 10 * np.log10(psds.mean(axis=0)) 
+                df_psd = pd.DataFrame({'Freq': freqs, 'Power': avg_psd})
+                fig = px.line(df_psd, x='Freq', y='Power', labels={'Freq': 'Frequency (Hz)', 'Power': 'Power (dB)'})
+                fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                 shapes=[dict(type='rect', xref='paper', yref='paper', x0=0, y0=0, x1=1, y1=1, line=dict(color="#30363d", width=2))])
+                st.plotly_chart(fig, use_container_width=True)
 
-if nav == "📊 Power Spectrum":
-    col_t, col_btn = st.columns([0.88, 0.12])
-    
-    # RANGES ADDED BACK TO SIDEBAR AND CALCULATION
-    with st.sidebar:
-        st.subheader("Filter Range Settings")
-        f_low = st.slider("Low Range (Hz)", 0.1, 20.0, 1.0)
-        f_high = st.slider("High Range (Hz)", 20.0, 100.0, 50.0)
+    elif nav == "🔗 Connectivity Map":
+        st.title("Neural Network Synchronization")
+        bands = {"Delta": (0.5, 4), "Theta": (4, 8), "Alpha": (8, 13), "Beta": (13, 30), "Gamma": (30, 80)}
+        with st.sidebar:
+            sel_band = st.selectbox("Frequency Band", list(bands.keys()), index=2)
+            num_ch = st.slider("Node Count", 2, min(len(raw_data.ch_names), 64), 16)
+        
+        l_f, h_f = bands[sel_band]
+        ch_names = raw_data.ch_names[:num_ch]
+        data_filt = raw_data.copy().pick_channels(ch_names).filter(l_f, h_f, verbose=False).get_data()
+        corr = np.corrcoef(data_filt)
+        fig = px.imshow(corr, x=ch_names, y=ch_names, color_continuous_scale='Viridis', height=800)
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color="white"),
+                         shapes=[dict(type='rect', xref='paper', yref='paper', x0=0, y0=0, x1=1, y1=1, line=dict(color="#30363d", width=2))])
+        st.plotly_chart(fig, use_container_width=True)
 
-    col_t.title(f"Power Spectral Density ({f_low}Hz - {f_high}Hz)")
-    
-    with st.spinner("Calculating..."):
-        psd_raw = raw_data.copy().filter(f_low, f_high, verbose=False)
-        psd_obj = psd_raw.compute_psd(fmin=f_low, fmax=f_high)
-        fig = psd_obj.plot(average=True, spatial_colors=True, show=False)
-        fig.patch.set_facecolor('white')
-    
-    with col_btn:
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png")
-        st.download_button("📥", data=buf.getvalue(), file_name="psd_filtered.png")
-    
-    st.pyplot(fig)
+    elif nav == "🌀 PAC Coupling":
+        st.title("Advanced PAC Dashboard")
+        with st.spinner("Analyzing Phase-Amplitude Coupling..."):
+            sf = raw_data.info['sfreq']
+            data_raw = raw_data.get_data(picks=[0], stop=int(sf * 5))
+            data = data_raw.reshape(1, -1) 
+            
+            if data.shape[-1] < sf:
+                st.warning("⚠️ Signal segment too short for PAC.")
+            else:
+                f_pha = np.arange(2, 18, 1)
+                f_amp = np.arange(60, 200, 2)
+                p = Pac(idpac=(2, 0, 0), f_pha=f_pha, f_amp=f_amp, dcomplex='hilbert')
+                phases = p.filterfit(sf, data)
+                pac_val = phases.mean(0)
+                clean_phases = np.angle(phases).flatten()
+                clean_phases = clean_phases[np.isfinite(clean_phases)]
 
-elif nav == "🔗 Connectivity Map":
-    col_t, col_btn = st.columns([0.88, 0.12])
-    
-    with st.sidebar:
-        # RANGES ADDED TO WAVE SELECTION
-        bands = {
-            "Delta (0.5–4Hz)": (0.5, 4), 
-            "Theta (4–8Hz)": (4, 8), 
-            "Alpha (8–12Hz)": (8, 12), 
-            "Beta (13–30Hz)": (13, 30)
-        }
-        sel_name = st.selectbox("Wave Selection", list(bands.keys()), index=2)
-        l_f, h_f = bands[sel_name]
-        num_ch = st.slider("Nodes", 2, len(raw_data.ch_names), len(raw_data.ch_names))
+                plt.style.use('dark_background')
+                fig = plt.figure(figsize=(16, 10))
+                fig.patch.set_facecolor('#0b0e14')
+                gs = fig.add_gridspec(2, 2, width_ratios=[1.8, 1], height_ratios=[1.5, 1])
 
-    col_t.title(f"Functional Connectivity: {sel_name}")
-    
-    ch_list = raw_data.ch_names[:num_ch]
-    filt = raw_data.copy().filter(l_f, h_f, verbose=False).pick_channels(ch_list)
-    corr = filt.to_data_frame().drop(columns=['time']).corr()
-    
-    # INCREASED HEIGHT FOR CLARITY (800px instead of default)
-    fig = px.imshow(corr, color_continuous_scale='RdBu_r', template="plotly_white", height=800)
-    
-    with col_btn:
-        buf = io.StringIO()
-        fig.write_html(buf)
-        st.download_button("📥", data=buf.getvalue(), file_name="connectivity.html")
-    
-    st.plotly_chart(fig, use_container_width=True)
+                ax_heat = fig.add_subplot(gs[0, 0])
+                im = ax_heat.imshow(pac_val, aspect='auto', origin='lower', cmap='jet', extent=[f_pha[0], f_pha[-1], f_amp[0], f_amp[-1]])
+                plt.colorbar(im, ax=ax_heat)
+                ax_heat.set_title("PAC Comodulogram")
 
-elif nav == "🌀 PAC Coupling":
-    col_t, col_btn = st.columns([0.88, 0.12])
-    col_t.title("Phase-Amplitude Coupling")
-    
-    target = st.sidebar.selectbox("Electrode", raw_data.ch_names)
-    p = Pac(idpac=(1, 0, 0), f_pha=[2, 12], f_amp=[30, 80])
-    data = raw_data.get_data(picks=[target])
-    phases = p.filterfit(raw_data.info['sfreq'], data)
-    
-    plt.figure(figsize=(12, 7))
-    p.comodulogram(phases.mean(0), title=f"PAC Analysis: {target} (Alpha Phase mod. Gamma Amp.)", cmap='viridis')
-    
-    with col_btn:
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png")
-        st.download_button("📥", data=buf.getvalue(), file_name="pac.png")
-    
-    st.pyplot(plt.gcf())
-    plt.close()
+                ax_polar = fig.add_subplot(gs[0, 1], projection='polar')
+                if len(clean_phases) > 0:
+                    theta = np.linspace(0.0, 2 * np.pi, 18, endpoint=False)
+                    radii, _ = np.histogram(clean_phases, bins=18)
+                    ax_polar.bar(theta, radii, width=0.3, color='#ff5555', alpha=0.7)
+                ax_polar.set_title("Phase Distribution")
 
-st.divider()
-st.caption(" NIT ROURKELA | HARISH GOURU ")
+                ax_time = fig.add_subplot(gs[1, :])
+                ax_time.plot(data[0], color='#58a6ff', lw=1)
+                ax_time.set_title("Analyzed Signal Segment")
+
+                plt.tight_layout()
+                st.markdown('<div style="border: 2px solid #30363d; border-radius: 10px; padding: 10px;">', unsafe_allow_html=True)
+                st.pyplot(fig)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+with st.sidebar:
+    st.caption(" Harish.G | M.Tech v6.0")
